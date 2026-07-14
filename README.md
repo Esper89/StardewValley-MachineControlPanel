@@ -24,7 +24,7 @@ Some rules take a number of different items, based on conditions or context tags
 
 Besides the item based rules, this mod also let you turn off rules that produce without need for input, such as Coffee Maker. Disabling this type of rule may cause placed machines to not work even after enabling the rule again, until the machine in question is removed and placed again.
 
-Turning off a rule with this mod does not always prevent the machine from accepting an input. If another rule further down the list that is normally unreachable can accept the item, it's possible to get items not obtainable otherwise, such as Hops Juice from a keg instead of Pale Ale. This can be useful in case where multiple mods added rules to the same machine, and you want output from a particular mod. For case where you want to completely prevent a machine from taking a particular item, use the inputs tab instead.
+Turning off a rule with this mod does not always prevent the machine from accepting an input. If another rule further down the list that is normally unreachable can accept the item, it's possible to get items not obtainable otherwise, such as Hops Juice from a keg instead of Pale Ale. This can be useful in case where multiple mods added rules to the same machine, and you want output from a particular mod. This behavior can be disabled by turning off the Impossible Rules config option. For case where you want to completely prevent a machine from taking a particular item, use the inputs tab instead.
 
 Crab Pots and Tappers seem like machines and get treated as such by automation mods, but they are not supported by this mod. In a similar vein, C# mods that add bespoke machine like logic outside of `Data/Machines` are also not supported.
 
@@ -78,6 +78,7 @@ Only the host player is allowed to change machine rules, but everyone can open t
 * `Machine Select Key`: Press this key to open a selection menu for all machines in the game
     * Default: LeftControl+Q
 * `Progression Mode`: On the machine select page, hide not yet obtained machines.
+* `Impossible Rules`: Allow processing machine rules that would be impossible without this mod. When this setting is disabled, rules that are impossible because of EMC additional fuels or game state queries in earlier rules may still be available.
 * `Default Page`: Page of control panel to display by default.
 * `Default Is Global`: Page of control panel to display by default.
 * `Config Per Save`: Determines how the save data is retained.

@@ -89,6 +89,9 @@ internal sealed class ModConfig
     /// <summary>On the machine selection page, hide machines the player don't not have yet.</summary>
     public bool ProgressionMode { get; set; } = true;
 
+    /// <summary>Allow processing machine rules that would be impossible without this mod.</summary>
+    public bool ImpossibleRules { get; set; } = true;
+
     /// <summary>Use the more visible question mark icon that recolors rarely seem to touch :(</summary>
     public bool AltQuestionMark { get; set; } = false;
 
@@ -108,6 +111,7 @@ internal sealed class ModConfig
         DefaultPage = DefaultPageOption.Rules;
         DefaultIsGlobal = true;
         ProgressionMode = true;
+        ImpossibleRules = true;
         AltQuestionMark = false;
         ConfigPerSave = true;
         RuleEntriesPageSize = 8;
@@ -199,6 +203,20 @@ internal sealed class ModConfig
             },
             name: I18n.Config_ProgressionMode_Name,
             tooltip: I18n.Config_ProgressionMode_Description
+        );
+        GMCM.AddBoolOption(
+            mod,
+            getValue: () => ImpossibleRules,
+            setValue: (value) =>
+            {
+                ImpossibleRules = value;
+                if (value)
+                    PlayerProgressionCache.Populate();
+                else
+                    PlayerProgressionCache.Clear();
+            },
+            name: I18n.Config_ImpossibleRules_Name,
+            tooltip: I18n.Config_ImpossibleRules_Description
         );
         GMCM.AddBoolOption(
             mod,

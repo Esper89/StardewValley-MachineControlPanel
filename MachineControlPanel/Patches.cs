@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
+using MachineControlPanel.Data;
 using MachineControlPanel.GUI;
 using StardewModdingAPI;
 using StardewModdingAPI.Utilities;
@@ -32,6 +33,14 @@ internal static class Patches
         harmony.Patch(
             original: AccessTools.DeclaredMethod(typeof(MachineDataUtility), nameof(MachineDataUtility.CanApplyOutput)),
             transpiler: new HarmonyMethod(typeof(Patches), nameof(MachineDataUtility_CanApplyOutput_Transpiler))
+        );
+        harmony.Patch(
+            original: AccessTools.DeclaredMethod(
+                typeof(MachineDataUtility), nameof(MachineDataUtility.TryGetMachineOutputRule)
+            ),
+            transpiler: new HarmonyMethod(
+                typeof(Patches), nameof(MachineDataUtility_TryGetMachineOutputRule_Transpiler)
+            )
         );
         ModEntry.Log($"Applied MachineDataUtility.CanApplyOutput Transpiler", LogLevel.Trace);
         harmony.Patch(
@@ -84,6 +93,13 @@ internal static class Patches
         return false;
     }
 
+    // if positive, all rules with a RequiredCount greater than this value will be skipped unless ImpossibleRules is
+    // enabled
+    private static int maxRequiredCount = -1;
+
+    // set within CanApplyOutput to break early, and read to determine if the last call to CanApplyOutput broke early
+    private static bool CanApplyOutput_breakEarly = false;
+
     /// <summary>
     /// Check whether a rule or input item should be skipped
     /// </summary>
@@ -94,12 +110,14 @@ internal static class Patches
     /// <param name="idx"></param>
     /// <returns></returns>
     private static bool ShouldSkipMachineInput(
-        MachineOutputTriggerRule trigger2,
-        SObject machine,
-        MachineOutputRule rule,
+        MachineOutputTriggerRule? trigger2,
+        SObject? machine,
+        MachineOutputRule? rule,
         Item inputItem
     )
     {
+        CanApplyOutput_breakEarly = false;
+
         if (
             trigger2 == null
             || rule == null
@@ -108,6 +126,15 @@ internal static class Patches
             || ModEntry.SaveData == null
         )
             return false;
+
+        if (
+            !ModEntry.Config.ImpossibleRules
+            && maxRequiredCount >= 0
+            && trigger2.RequiredCount > maxRequiredCount
+        )
+            return true;
+
+        bool ruleDisabled = false;
         RuleIdent ident = new(rule.Id, trigger2.Id);
         // check local
         if (
@@ -117,14 +144,36 @@ internal static class Patches
                 out ModSaveDataEntry? msdEntry
             ) && ShouldSkipMachineInputEntry(machine, inputItem, msdEntry, ident)
         )
-            return true;
+            ruleDisabled = true;
         // check global
         if (
             ModEntry.SaveData.TryGetModSaveDataEntry(machine.QualifiedItemId, null, out msdEntry)
             && ShouldSkipMachineInputEntry(machine, inputItem, msdEntry, ident)
         )
-            return true;
-        return false;
+            ruleDisabled = true;
+
+        if (ruleDisabled)
+        {
+            // GSQs that aren't immutably true might prevent this rule from blocking later rules. Determining if a GSQ
+            // depends only on the input item (and is therefore safe to evaluate and take into account for determining
+            // impossibility) would be complicated and would not support custom GSQs.
+            if (!GameStateQuery.IsImmutablyTrue(trigger2.Condition)) return true;
+            else
+            {
+                if (trigger2.RequiredCount > 1)
+                {
+                    maxRequiredCount = Math.Min(maxRequiredCount, trigger2.RequiredCount - 1);
+                    return true;
+                }
+                else if (ModEntry.Config.ImpossibleRules) return true;
+                else
+                {
+                    CanApplyOutput_breakEarly = true;
+                    return false;
+                }
+            }
+        }
+        else return false;
     }
 
     /// <summary>
@@ -139,9 +188,9 @@ internal static class Patches
     /// <returns></returns>
     private static bool ShouldSkipMachineInput_DayUpdate(
         MachineOutputTrigger trigger,
-        MachineOutputTriggerRule trigger2,
-        SObject machine,
-        MachineOutputRule rule,
+        MachineOutputTriggerRule? trigger2,
+        SObject? machine,
+        MachineOutputRule? rule,
         Item inputItem
     )
     {
@@ -174,6 +223,19 @@ internal static class Patches
         try
         {
             CodeMatcher matcher = new(instructions, generator);
+
+            matcher
+                .Start()
+                .MatchEndForward([
+                    new(OpCodes.Call, AccessTools.EnumeratorMoveNext(AccessTools.Method(
+                        typeof(List<MachineOutputTriggerRule>),
+                        nameof(List<MachineOutputTriggerRule>.GetEnumerator)
+                    ))),
+                    new() { opcodes = [OpCodes.Brtrue, OpCodes.Brtrue_S] },
+                    new() { opcodes = [OpCodes.Leave, OpCodes.Leave_S] },
+                ])
+                .ThrowIfNotMatch($"could not find end of foreach loop over {typeof(List<MachineOutputTriggerRule>)}")
+                .CreateLabel(out Label breakLoop);
 
             // insert just before if (trigger2.RequiredCount > inputItem.Stack)
             matcher
@@ -208,6 +270,8 @@ internal static class Patches
                     // new(OpCodes.Ldloc, idx), // foreach idx
                     new(OpCodes.Call, AccessTools.DeclaredMethod(typeof(Patches), nameof(ShouldSkipMachineInput))),
                     new(OpCodes.Brtrue, lbl),
+                    new(OpCodes.Ldsfld, AccessTools.DeclaredField(typeof(Patches), nameof(CanApplyOutput_breakEarly))),
+                    new(OpCodes.Brtrue, breakLoop),
                     ldloc, // MachineOutputTriggerRule trigger2
                 ]);
 
@@ -236,6 +300,8 @@ internal static class Patches
                         AccessTools.DeclaredMethod(typeof(Patches), nameof(ShouldSkipMachineInput_DayUpdate))
                     ),
                     new(OpCodes.Brtrue, lbl),
+                    new(OpCodes.Ldsfld, AccessTools.DeclaredField(typeof(Patches), nameof(CanApplyOutput_breakEarly))),
+                    new(OpCodes.Brtrue, breakLoop),
                     new(OpCodes.Ldarg_S, (byte)6),
                 ]);
 
@@ -244,6 +310,95 @@ internal static class Patches
         catch (Exception err)
         {
             ModEntry.Log($"Error in MachineDataUtility_CanApplyOutput_Transpiler:\n{err}", LogLevel.Error);
+            return instructions;
+        }
+    }
+
+    private static RuleStatus GetMachineRuleStatus(
+        SObject? machine,
+        MachineOutputRule? rule,
+        MachineOutputTrigger trigger,
+        Item? inputItem,
+        Farmer? who,
+        GameLocation? location,
+        out MachineOutputTriggerRule? triggerRule,
+        out bool matchesExceptCount
+    )
+    {
+        CanApplyOutput_breakEarly = false;
+        bool ruleMatches = MachineDataUtility.CanApplyOutput(
+            machine, rule, trigger, inputItem, who, location,
+            out triggerRule, out matchesExceptCount
+        );
+        bool brokeEarly = CanApplyOutput_breakEarly;
+
+        if (!ModEntry.Config.ImpossibleRules && brokeEarly) return RuleStatus.Break;
+        else if (ruleMatches) return RuleStatus.Match;
+        else return RuleStatus.Skip;
+    }
+
+    private enum RuleStatus : int { Skip = 0, Match = 1, Break = 2 }
+
+    private static IEnumerable<CodeInstruction> MachineDataUtility_TryGetMachineOutputRule_Transpiler(
+        IEnumerable<CodeInstruction> instructions,
+        ILGenerator generator
+    )
+    {
+        try
+        {
+            return new CodeMatcher(instructions, generator)
+                .Start()
+                .Insert([
+                    new(OpCodes.Ldc_I4, int.MaxValue),
+                    new(OpCodes.Stsfld, AccessTools.DeclaredField(typeof(Patches), nameof(maxRequiredCount))),
+                ])
+                .MatchEndForward([
+                    new(OpCodes.Call, AccessTools.EnumeratorMoveNext(AccessTools.Method(
+                        typeof(List<MachineOutputRule>),
+                        nameof(List<MachineOutputRule>.GetEnumerator)
+                    ))),
+                    new() { opcodes = [OpCodes.Brtrue, OpCodes.Brtrue_S] },
+                    new() { opcodes = [OpCodes.Leave, OpCodes.Leave_S] },
+                ])
+                .ThrowIfNotMatch($"could not find end of foreach loop over {typeof(List<MachineOutputRule>)}")
+                .CreateLabel(out Label breakLoop)
+                .MatchStartForward([new(OpCodes.Endfinally)])
+                .ThrowIfNotMatch($"could not find end of foreach finalizer")
+                .Insert([
+                    new(OpCodes.Ldc_I4_M1),
+                    new(OpCodes.Stsfld, AccessTools.DeclaredField(typeof(Patches), nameof(maxRequiredCount))),
+                ])
+                .Start()
+                .MatchStartForward([
+                    new(OpCodes.Call, AccessTools.Method(
+                        typeof(MachineDataUtility),
+                        nameof(MachineDataUtility.CanApplyOutput)
+                    )),
+                    new() { opcodes = [OpCodes.Brfalse, OpCodes.Brfalse_S] },
+                ])
+                .ThrowIfNotMatch(
+                    $"could not find call to {typeof(MachineDataUtility)}.{nameof(MachineDataUtility.CanApplyOutput)}"
+                )
+                .SetOperandAndAdvance(AccessTools.DeclaredMethod(typeof(Patches), nameof(GetMachineRuleStatus)))
+                .CreateLabel(out Label endIf)
+                .Insert([
+                    new(OpCodes.Dup),
+                    new(OpCodes.Ldc_I4_2),
+                    new(OpCodes.Ceq),
+                    new(OpCodes.Brfalse, endIf),
+                    new(OpCodes.Pop),
+                    new(OpCodes.Br, breakLoop),
+                ])
+                .InstructionEnumeration();
+        }
+        catch (Exception err)
+        {
+            ModEntry.Log(
+                $"error transpiling {typeof(MachineDataUtility)}." +
+                $"{nameof(MachineDataUtility.TryGetMachineOutputRule)}:\n{err}",
+                LogLevel.Error
+            );
+
             return instructions;
         }
     }

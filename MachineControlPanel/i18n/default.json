@@ -19,6 +19,8 @@
   "config.default-page.item-inputs": "Item Inputs",
   "config.progression-mode.name": "Progression Mode",
   "config.progression-mode.description": "On the machine select page, hide not yet obtained machines.",
+  "config.impossible-rules.name": "Impossible Rules",
+  "config.impossible-rules.description": "Allow processing machine rules that would be impossible without this mod.",
   "config.rule-entries-page-size.name": "Rule Entries Page Row",
   "config.rule-entries-page-size.description": "Number of rows in the rule entries tab to display in a single page, lower this number if you experiance lag in the menu.",
   "config.grid-items-page-size.name": "Grid Items Page Size",
